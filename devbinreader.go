@@ -16,12 +16,11 @@ func (r DevBinReader) Close() error {
 func (r DevBinReader) Read(p []byte) (n int, err error) {
 	if n, err := r.input.Read(p); err != nil {
 		if errors.Is(err, io.EOF) {
-			panic("done")
-			// if _, err := r.input.Seek(0, io.SeekStart); err != nil {
-			// 	return r.input.Read(p)
-			// } else {
-			// 	return 0, err
-			// }
+			if _, err := r.input.Seek(0, io.SeekStart); err != nil {
+				return r.input.Read(p)
+			} else {
+				return 0, err
+			}
 		}
 	} else {
 		return n, nil

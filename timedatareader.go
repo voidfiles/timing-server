@@ -8,6 +8,8 @@ import (
 
 type SegmentValueKind int
 
+var DO_NOT_UPDATE uint8 = 254
+
 const (
 	SEGMENT_DATA SegmentValueKind = iota
 	SEGMENT_FORMAT

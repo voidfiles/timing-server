@@ -2,13 +2,13 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,11 +66,23 @@ func config() {
 	}
 }
 
+type JSONableSlice []uint8
+
+func (u JSONableSlice) MarshalJSON() ([]byte, error) {
+	var result string
+	if u == nil {
+		result = "null"
+	} else {
+		result = strings.Join(strings.Fields(fmt.Sprintf("%d", u)), ",")
+	}
+	return []byte(result), nil
+}
+
 // Application Types
 type Channel struct {
-	Number int   `json:"number,omitempty"`
-	Data   []int `json:"data,omitempty"`
-	Format []int `json:"format,omitempty"`
+	Number uint8         `json:"number,omitempty"`
+	Data   JSONableSlice `json:"data,omitempty"`
+	Format JSONableSlice `json:"format,omitempty"`
 }
 
 func (c *Channel) BlankData() {
@@ -79,32 +91,25 @@ func (c *Channel) BlankData() {
 	}
 }
 
-func MustNewChannel(number int) *Channel {
+func MustNewChannel(number uint8) *Channel {
 	return &Channel{
 		Number: number,
-		Data:   make([]int, 8),
-		Format: make([]int, 8),
+		Data:   make([]uint8, 8),
+		Format: make([]uint8, 8),
 	}
 }
 
 type Frame struct {
-	Channels map[int]*Channel `json:"channels"`
-	sync     sync.Mutex       `json:"-"`
+	Channels map[uint8]*Channel `json:"channels"`
 }
 
-func (f *Frame) BlankChannelData(channel int) {
-	f.sync.Lock()
-	defer f.sync.Unlock()
-	i := 7
-	for i >= 0 {
+func (f *Frame) BlankChannelData(channel uint8) {
+	for i := 0; i < 8; i++ {
 		f.Channels[channel].Data[i] = 0x20
-		i--
 	}
 }
 
-func (f *Frame) SetSegment(channel int, segment int, data int, channelReadState ChannelReadState) {
-	f.sync.Lock()
-	defer f.sync.Unlock()
+func (f *Frame) SetSegment(channel uint8, segment int, data uint8, channelReadState ChannelReadState) {
 	// log.Debug("%d %d %d", channel, segment, data)
 	if val, ok := f.Channels[channel]; ok {
 		if channelReadState == CHANNEL_READ_STATE_DATA {
@@ -123,11 +128,11 @@ func (f *Frame) SetSegment(channel int, segment int, data int, channelReadState 
 	}
 }
 
-func (f *Frame) getChar(channel, segment int) string {
+func (f *Frame) getChar(channel, segment uint8) string {
 	return string(rune(f.Channels[channel].Data[segment]))
 }
 
-func (f *Frame) getTime(channel int) string {
+func (f *Frame) getTime(channel uint8) string {
 	if f.getChar(channel, 5) == "0" && f.getChar(channel, 6) == "0" {
 		return "--:--.-"
 	} else {
@@ -135,7 +140,7 @@ func (f *Frame) getTime(channel int) string {
 	}
 }
 
-func (f *Frame) LaneFormat(channel int) string {
+func (f *Frame) LaneFormat(channel uint8) string {
 	lane := f.getChar(channel, 0)
 	place := f.getChar(channel, 1)
 	time := f.getTime(channel)
@@ -144,17 +149,14 @@ func (f *Frame) LaneFormat(channel int) string {
 }
 
 func (f *Frame) AsJSON() ([]byte, error) {
-	f.sync.Lock()
-	defer f.sync.Unlock()
 	return json.Marshal(f)
 }
 
 func MustNewFrame() *Frame {
-	channels := make(map[int]*Channel)
+	channels := make(map[uint8]*Channel)
 
 	return &Frame{
 		Channels: channels,
-		sync:     sync.Mutex{},
 	}
 }
 
@@ -186,7 +188,7 @@ func MustGetFile(file string) io.ReadSeekCloser {
 		log.Fatalf("os.Open: %v", err)
 	}
 
-	return &RateLimitFileReader{fd}
+	return DevBinReader{input: &RateLimitFileReader{fd}}
 }
 
 type TIMING_ITERATOR_STATE int
@@ -199,11 +201,12 @@ const (
 type TimingIterator struct {
 	input        io.ReadSeekCloser
 	outputFrame  *Frame
-	channel      int
+	channel      uint8
 	replay       bool
 	frameSync    sync.Mutex
 	laneUp       bool
 	landeAddress bool
+	channelData  *Channel
 }
 
 func MustNewTimingIterator(input io.ReadSeekCloser, replay bool) *TimingIterator {
@@ -215,9 +218,8 @@ func MustNewTimingIterator(input io.ReadSeekCloser, replay bool) *TimingIterator
 		frameSync:    sync.Mutex{},
 		laneUp:       false,
 		landeAddress: false,
+		channelData:  MustNewChannel(0),
 	}
-
-	ti.frameSync.Lock()
 
 	return ti
 }
@@ -230,21 +232,6 @@ func (ti *TimingIterator) Iterate() TIMING_ITERATOR_STATE {
 		read, err := ti.input.Read(frame)
 
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				logger.Debug("Reached end of file")
-				if ti.replay {
-					logger.Debug("Attempting to restart")
-					if _, err := ti.input.Seek(0, io.SeekStart); err != nil {
-						log.Fatalf("failed to replay data %s", err)
-						return TIMING_ITERATOR_STATE_DONE
-					} else {
-						logger.Debug("Restarting file from start")
-						continue
-					}
-				}
-				return TIMING_ITERATOR_STATE_DONE
-			}
-
 			log.Fatalf("failed to read from input %s", err)
 		}
 
@@ -256,25 +243,26 @@ func (ti *TimingIterator) Iterate() TIMING_ITERATOR_STATE {
 		currentByte := frame[0]
 
 		if currentByte >= 0x7f {
-			ti.frameSync.Unlock()
-			defer ti.frameSync.Lock()
 			channelReadState = ChannelReadState((currentByte & 1))
 
 			if ti.channel > 1 && ti.channel < 7 {
 				logger.Debug("Parsing control byte new_frame:true", "channel", ti.channel, "data", ti.outputFrame.LaneFormat(ti.channel))
 			}
 
-			ti.channel = int(((currentByte >> 1) & 0x1f) ^ 0x1f)
-
+			ti.channel = ((currentByte >> 1) & 0x1f) ^ 0x1f
+			ti.channelData.Number = ti.channel
 			logger.Debug("Parsing control byte new_frame:true", "channelReadState", channelReadState, "channel", ti.channel)
 
-			if int(currentByte) > 190 {
+			if currentByte > 190 {
+				for i := 0; i < 8; i++ {
+					ti.channelData.Data[i] = 0x20
+				}
 				ti.outputFrame.BlankChannelData(ti.channel)
 			} else {
 				ti.laneUp = false
 			}
 
-			if int(currentByte) > 169 && int(currentByte) < 190 {
+			if currentByte > 169 && currentByte < 190 {
 				ti.landeAddress = true
 			} else {
 				ti.landeAddress = false
@@ -297,9 +285,10 @@ func (ti *TimingIterator) Iterate() TIMING_ITERATOR_STATE {
 				} else {
 					segmentData = segmentData ^ 0x0f + 48 // 40 = 0x30 = ASCII '0'
 				}
-				ti.outputFrame.SetSegment(ti.channel, int(segmentNum), int(segmentData), channelReadState)
+				ti.channelData.Data[int(segmentNum)] = segmentData
+				ti.outputFrame.SetSegment(ti.channel, int(segmentNum), segmentData, channelReadState)
 			} else {
-				segmentNum := int((currentByte & 0xf0) >> 4)
+				segmentNum := (currentByte & 0xf0) >> 4
 				if segmentNum >= 8 {
 					log.Printf("While parsing the data for a channel found a segment greater then 8 %d", segmentNum)
 					continue
@@ -312,7 +301,8 @@ func (ti *TimingIterator) Iterate() TIMING_ITERATOR_STATE {
 					// data = data ^ 0x0f + 48;
 					segmentData = segmentData ^ 0x0f + 48 // 40 = 0x30 = ASCII '0'
 				}
-				ti.outputFrame.SetSegment(ti.channel, segmentNum, int(segmentData), channelReadState)
+				ti.channelData.Format[int(segmentNum)] = segmentData
+				ti.outputFrame.SetSegment(ti.channel, int(segmentNum), segmentData, channelReadState)
 			}
 		}
 	}
@@ -327,9 +317,6 @@ func (ti *TimingIterator) Next() bool {
 }
 
 func (ti *TimingIterator) Value() *Frame {
-	ti.frameSync.Lock()
-	defer ti.frameSync.Unlock()
-
 	return ti.outputFrame
 }
 
@@ -380,31 +367,32 @@ func HTTPServer(m *melody.Melody) *http.Server {
 func Integrator(m *melody.Melody, timing_iterator *TimingIterator) {
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for timing_iterator.Next() {
-			// timing_iterator.Value()
+	// wg.Add(1)
+	// go func() {
+	// 	defer wg.Done()
+	// 	for timing_iterator.Next() {
+	// 		// timing_iterator.Value()
 
-		}
-	}()
+	// 	}
+	// }()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for {
+			if !timing_iterator.Next() {
+				break
+			}
 			frame := timing_iterator.Value()
 			j, err := frame.AsJSON()
 			if err != nil {
 				panic(fmt.Errorf("Integrator %s", err))
 			}
-
 			if err := m.Broadcast([]byte(j)); err != nil {
 				panic(err)
 			}
 
 			logger.Debug("msg", "msg", string(j))
-			time.Sleep(time.Second / 10)
 		}
 	}()
 
