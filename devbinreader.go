@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -16,17 +17,17 @@ func (r DevBinReader) Close() error {
 func (r DevBinReader) Read(p []byte) (n int, err error) {
 	if n, err := r.input.Read(p); err != nil {
 		if errors.Is(err, io.EOF) {
+			fmt.Printf("Resettings dev input")
 			if _, err := r.input.Seek(0, io.SeekStart); err != nil {
-				return r.input.Read(p)
+				panic(err)
 			} else {
-				return 0, err
+				return r.input.Read(p)
 			}
 		}
+		panic(err)
 	} else {
 		return n, nil
 	}
-
-	return 0, nil
 }
 
 func (r DevBinReader) Seek(offset int64, whence int) (int64, error) {

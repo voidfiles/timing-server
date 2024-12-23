@@ -83,12 +83,12 @@ export default () => {
     <table className="font-mono">
       <thead>
         <tr>
-          <td>Channel</td>
+          <td>ch</td>
           <td>Kind</td>
+          <td>Wire</td>
           <td>Data</td>
           <td>Raw</td>
           <td>Ints</td>
-          <td>Format</td>
         </tr>
       </thead>
       <tbody>
@@ -133,14 +133,15 @@ export default () => {
               </span>
             );
           });
+
           return (
             <tr key={i}>
               <td>{i}</td>
               <td>{selectForChannel(i, channel)}</td>
+              <td>{channel.preformatted}</td>
               <td>{data}</td>
               <td>{raw}</td>
               <td>{ints}</td>
-              <td>{format}</td>
             </tr>
           );
         })}

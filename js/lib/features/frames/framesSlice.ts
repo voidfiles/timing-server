@@ -52,11 +52,13 @@ export const frameSlice = createSlice({
         const i = channel.number || 0;
         channel.data.forEach((dataVal, n) => {
           const formatVal = channel.format[n];
+          const preformatted = channel.preformatted;
           if (!state.channels[i]) {
             state.channels.splice(i, 0, {
               number: i,
               data: [0, 0, 0, 0, 0, 0, 0, 0],
               format: [0, 0, 0, 0, 0, 0, 0, 0],
+              preformatted: "",
             });
           }
           if (state.channels[i].data[n] != dataVal) {
@@ -64,6 +66,9 @@ export const frameSlice = createSlice({
           }
           if (state.channels[i].format[n] != formatVal) {
             state.channels[i].format[n] = formatVal;
+          }
+          if (state.channels[i].preformatted != preformatted) {
+            state.channels[i].preformatted = preformatted;
           }
         });
       });

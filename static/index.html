@@ -1,0 +1,85 @@
+<html>
+    <head>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script src="//unpkg.com/alpinejs" defer></script>
+        <script>
+            document.addEventListener('alpine:init', () => {
+                const store = Alpine.store('frame', {
+                    channels: [],
+         
+                    updateFromFrame(frame) {
+                        Object.entries(frame.channels).forEach(([key, value]) => {
+                            if(!this.channels[key]) {
+                                this.channels[key] = {
+                                    id: key,
+                                    data: [0, 0, 0, 0, 0, 0, 0, 0],
+                                    preformatted: "________",
+                                }
+                            }
+                            
+                            this.channels[key].data = value.data;
+                            this.channels[key].preformatted = value.preformatted;
+                        })
+                    }
+                });
+                const ws = new WebSocket('ws://localhost:8000/ws')
+                const listener = (event) => {
+                    const data = JSON.parse(event.data)
+                    Alpine.store('frame').updateFromFrame(data);
+                }
+
+                ws.addEventListener('message', listener)
+            });
+        </script>
+    </head>
+    <body>
+        <h1>Hey</h1>
+        <table class="table-auto">
+            <thead>
+                <tr>
+                    <td>CH</td>
+                    <td>Value</td>
+                </tr>
+            </thead>
+            <tbody x-data>
+                <template x-for="channel in $store.frame.channels">
+                    <tr>
+                        <td x-text="channel.id"></td>
+                        <td x-text="channel.preformatted"></td>
+                    </tr>
+                </template>
+            </tbody>
+        </table> 
+    </body>
+</html>
+
+<!-- 
+updateFrame: (state, action: PayloadAction<FrameUpdate>) => {
+    if (state.value != action.payload.value) {
+      state.value = action.payload.value;
+    }
+    Object.entries(action.payload.channels).forEach(([k, channel], _) => {
+      const i = channel.number || 0;
+      channel.data.forEach((dataVal, n) => {
+        const formatVal = channel.format[n];
+        const preformatted = channel.preformatted;
+        if (!state.channels[i]) {
+          state.channels.splice(i, 0, {
+            number: i,
+            data: [0, 0, 0, 0, 0, 0, 0, 0],
+            format: [0, 0, 0, 0, 0, 0, 0, 0],
+            preformatted: "",
+          });
+        }
+        if (state.channels[i].data[n] != dataVal) {
+          state.channels[i].data[n] = dataVal;
+        }
+        if (state.channels[i].format[n] != formatVal) {
+          state.channels[i].format[n] = formatVal;
+        }
+        if (state.channels[i].preformatted != preformatted) {
+          state.channels[i].preformatted = preformatted;
+        }
+      });
+    });
+  }, -->
